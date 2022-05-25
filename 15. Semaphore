@@ -1,0 +1,82 @@
+# Semaphore
+---
+> Semaphore란?  
+> 앞에서 배웠던 Mutual Exclusion을 보장하기 위한 방법들에 이어 등장하는 새로운 방식이다.  
+
+- 앞서 배웠던 Lock이나, Conditional Variable과는 다르게, 함수가 반환 값이 정수인 방식이다.
+
+## Semaphore
+- ```sem_init(&s, 0, 1)```
+  - Semaphore을 초기화 하는 함수이다.
+  - 우리는 S값을 1로 초기화 한 뒤 Flag로 이용할 것이다.
+  - 2번째 argument인 0은 Semaphore이 같은 Process내의 모든 Thread간에 공유됨을 의미한다.
+- ```sem_wait()```
+  - 가장 먼저 함수에 들어가면 S값을 1 감소시킨다.
+  - S값이 0 이상인 경우 곧바로 return을 해버린다. (내 작업 가능)
+  - 하지만 S값이 음수인 경우엔, return 하지않고 wait한다.
+- ```sem_post()```
+  - 가장 먼저 함수에 들어가면 S값을 1 증가시킨다.
+  - 기다리고 있는 다른 Thread가 있다면, 깨운다.
+
+### Why Initialize to 1?
+- 왜 Semaphore을 1로 초기화 해야 하는가?
+  - 그래야 자기 혼자 Thread를 사용하고 있을 땐 0.
+  - 다음 Thread로 Context Switch가 되어버렸을 때 -1.
+  - 그 이후로도 1씩 쭉쭉 감소, 즉 Queue에 대기중인 Thread의 수가 곧 Semaphore의 절대값이 되기 때문이다.
+
+## Semaphore as CV
+> Conditional Variable로써 Semaphore을 사용하는 경우엔, Semaphore을 0으로 초기화 해야한다.   
+![image](https://user-images.githubusercontent.com/71700079/169207144-9247e183-2bf2-4966-9f54-f98b41226a93.png)  
+- 그 이유는, 위 코드를 한번 살펴보자.
+- 먼저 Buffer를 꽉 채워놓은 상태해서 시작했다고 생각해보자.
+  - 그럼 Producer에게 들어가서 ```sem_wait(&empty)``` 를 만나는데, 이 때 empty는 0이므로, -1이 되어 계속 wait를 한다.
+- 다음으로 Consumer에게 Context Switch가 발생해서 ```sem_wait(&full)``` 을 만나는데, 이 경우엔 물건의 수 만큼 full이 있다.
+  - 그럼 Semaphore 값을 1 감소시키고 Return해서 물건을 가져간 뒤 ```sem_post(&empty)``` 를 통해 empty를 하나 늘려준다.
+  - 물건이 한 칸 비었음을 Producer에게 알려주는 것이다.
+- 하지만 이 동작들은, 생각해보면 Mutual Exclusion이 전혀 보장되지가 않고 있음을 알 수 있다.  
+  - 그 말인 즉슨, Race condition이 발생해서 Buffer 내부가 올바른 상태를 가지지 않을 수 있다는 것이다.
+
+### Semaphore as CV : Mutex  
+![image](https://user-images.githubusercontent.com/71700079/169210862-3bdcd8dd-c613-4232-b3bd-0a0805408456.png)  
+- 위 사진과 같이 Mutex를 통해서, 물건을 넣고 빼는 과정에 Lock을 걸어버리면 해결이 가능하다!
+  - 당연히 Lock으로써의 역할을 할 Semaphore이기 때문에, 초기 Mutex 값은 1로 초기화를 한다.
+  - 어떤 Producer이 Mutex를 0으로 만들고 작업을 하면, 다른 Producer나 Consumer이 들어올 때엔 Mutex 값이 음수가 되므로 아무도 간섭할 수 없다.
+  - 따라서 Producer이나 Consumer이 여러명이어도 이 방식대로면, Mutual Exclusion을 보장하며 작동시킬 수 있다!
+
+## Reader - Writer Problem
+> 독자와 저자 문제를 생각해보자.  
+- 저자가 Buffer의 내용을 바꿀 때엔 분명히 Shared Variable의 값이 바뀌므로, Mutex가 보장되어야 한다.
+  - 하지만 독자의 입장에서는 읽기만 하면 되므로, 읽는 도중에 저자가 값을 바꾸는 일만 없으면 되며
+  - 다른 독자끼리의 간섭은 전혀 지장이 없다.
+- 따라서 아래와 같이, Read / Write Lock을 따로 둔다!  
+![image](https://user-images.githubusercontent.com/71700079/169213385-7fd08f62-32ff-4bb1-8fe5-9336f69ee991.png)  
+![image](https://user-images.githubusercontent.com/71700079/169213414-ac6d243c-7f61-4dce-9eef-caea4d01e2a6.png)  
+- ```rwlock_acquire_readlock()``` : 읽기 시작할 때, Reader의 수를 늘리고 Writelock을 거는 함수이다.
+  - Reader의 수 또한 Shared Variable이므로, lock을 걸고 늘려야한다.
+  - Writelock은 제일 처음 독자만 걸고 입장하면 된다.
+- ```rwlock_release_readlock()``` : 다 읽고 떠날 때, Reader의 수를 줄이고 Writelock을 푸는 함수이다.
+  - 여기 또한 Reader의 수를 줄일 때 Mutex가 보장되어야 한다.
+  - Writelock은 제일 마지막에 나가는 독자만 풀고 퇴장하면 된다.
+- Writelock을 거는 이유는, 독자가 읽는 도중에 저자가 값을 바꾸지 못하게 하기 위해서이다.
+  - 즉, Starvation이 발생할 수가 있다!
+  - 독자가 무한하게 늘어나는 경우, Writer은 결코 값을 수정할 수 없게된다.  
+
+## Dining Philosopher Problem
+> 원탁에 철학자 5명이 앉아서 식사를 한다고 생각해보자.  
+![image](https://user-images.githubusercontent.com/71700079/169214732-667dc961-d932-45e3-adbd-4865ddaa9a0f.png)
+1. 앉아서 가만히 생각을 하다가 배가 고픈 사람이 먼저 왼쪽 포크를 집는다. (왼쪽 포크가 없다면 대기)
+2. 오른쪽 포크를 집는다. (오른쪽 포크가 없다면 대기)
+3. 양쪽 포크를 모두 집었으면 식사가 가능하다.
+4. 충분히 밥을 먹었다면, 왼쪽 포크를 먼저 내려놓는다.
+5. 오른쪽 포크를 내려놓는다.
+6. 다시 배가 고파 질 때까지 생각한 뒤 배가 고프면 1번으로 돌아간다.  
+
+- 위와 같은 알고리즘에서는 치명적인 문제가 존재한다.
+  - 만약 모든 철학자가 동시에 왼쪽 포크를 집어올린다면?
+  - 오른쪽 포크는 존재하지 않는다.
+  - 즉, Deadlock에 빠져버려서 모든 철학자가 굶어죽는다.
+
+### Solution
+- Deadlock을 해결하는 방법은 매우 간단하다.
+  - 5명의 철학자 중 1명은 왼쪽이 아닌 오른쪽 부터 포크를 집게 하는 것이다.
+  - 그렇게하면 모두 동시에 집어도 누군가 하나는 분명히 식사를 할 수 있으므로, Deadlock에 빠지지는 않는다!
